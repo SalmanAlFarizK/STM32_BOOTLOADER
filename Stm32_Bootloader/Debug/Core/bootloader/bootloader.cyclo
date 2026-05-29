@@ -1,0 +1,8 @@
+../Core/bootloader/bootloader.c:72:6:BootLoaderInit	1
+../Core/bootloader/bootloader.c:96:10:BootLoaderCheckForUpdates	3
+../Core/bootloader/bootloader.c:132:13:BootLoaderGpioInit	1
+../Core/bootloader/bootloader.c:158:13:BootLoaderUartSendData	3
+../Core/bootloader/bootloader.c:182:13:BootLoaderUartReadData	1
+../Core/bootloader/bootloader.c:203:13:BootLoaderJumpUserApp	2
+../Core/bootloader/bootloader.c:263:6:HAL_GPIO_EXTI_Callback	2
+../Core/bootloader/bootloader.c:287:13:MX_USART2_UART_Init	1
