@@ -1,0 +1,36 @@
+#======================================================================
+# STM32 CubeIDE / TrueStudio / Eclipse Artifacts
+#======================================================================
+.metadata/
+.Config/
+RemoteSystemsTempFiles/
+*.launch
+
+# Ignore CubeMX backup and internal generation files
+Horizontal/
+Vertical/
+MX_Device.h
+
+#======================================================================
+# Build Outputs (Toolchain specific)
+#======================================================================
+# Ignore entire build directories (commonly named Debug, Release, or build)
+[Dd]ebug/
+[Rr]elease/
+[Bb]uild/
+
+# Specific toolchain extensions
+*.elf
+*.bin
+*.hex
+*.map
+*.o
+*.su
+*.d
+
+#======================================================================
+# VS Code & Operating System files
+#======================================================================
+.vscode/
+.DS_Store
+Thumbs.db
