@@ -13,6 +13,7 @@
  *****************************************************************************/
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include "stm32f4xx_hal.h"
 #include "bootloader.h"
 
@@ -22,8 +23,14 @@
 #define FLASH_SECTOR_2_BASE_ADDR	(0x08019000U)
 #define RESET_HANDLER_ADDR_OFFSET	(0x04)
 #define BL_UART_TX_TIMEOUT			(0x64)
+#define BL_UART_RX_TIMEOUT			(0x64)
+#define BL_UART_MAX_RX_LEN			(0x100)
 #define BL_BOOT_MSG					("Boot Loader Executing...\r\n")
 #define BL_JUMP_MSG					("Starting User Application...\r\n")
+#define BL_MAX_CMD_LEN				(0x06)
+#define BL_CMD_LEN_INDEX			(0x00)
+#define BL_CMD_OPCODE_INDEX			(0x01)
+#define BL_CMD_CRC_OFFSET			(0x02)
 
 /******************************************************************************
  * Typedefs.
@@ -33,10 +40,38 @@ typedef void (*pfnUserAppResetHandler)(void);
 /******************************************************************************
  * Enum Definitions.
  *****************************************************************************/
+/**
+ * @brief : Enumeration representing Bootloader command opcodes.
+ */
+typedef enum _eBlCmdOpCode_
+{
+	eBlCmdGetVersion 				= 0x51,
+	eBlCmdGetHelp					= 0x52,
+	eBlCmdGetChipId					= 0x53,
+	eBlCmdGetRdpStatus				= 0x54,
+	eBlCmdGoToAddr					= 0x55,
+	eBlCmdFlashErase				= 0x56,
+	eBlCmdMemWrite					= 0x57,
+	eBlCmdEnableReadWriteProtect	= 0x58,
+	eBlCmdMemRead					= 0x59,
+	eBlCmdReadSectorStatus			= 0x5A,
+	eBlCmdOTPRead					= 0x5B,
+	eBlCmdDisReadWriteProtyection	= 0x5C,
+	eBlCmdMax
+} eBlCmdOpCode;
 
 /******************************************************************************
  * Structure Definitions.
  *****************************************************************************/
+/**
+ * @brief : Structure representing Bootloader command.
+ */
+typedef struct _BlCmdStruct_
+{
+	uint8_t  ucBlCmdLen;
+	uint8_t  ucBlCmdOpCode;
+	uint32_t uiBlCmdCrc;
+} BlCmdStruct;
 
 /******************************************************************************
  * Global variable declaration.
@@ -49,8 +84,11 @@ UART_HandleTypeDef huart2;
 static void MX_USART2_UART_Init(void);
 static void BootLoaderGpioInit(void);
 static void BootLoaderUartSendData(uint8_t* pucData, uint16_t uhTxLen);
-static void BootLoaderUartReadData(uint8_t* pucData, uint16_t uhRxLen);
+static void BootLoaderUartReadData(uint8_t* pucData, uint16_t* puhRxLen);
 static void BootLoaderJumpUserApp(void);
+static eBlError BootLoaderParseCmd(uint8_t* pucCmdBuff, uint16_t uhCmdLen,
+		BlCmdStruct* ptBlCmdInfo);
+static void BootLoaderActions(void);
 
 /******************************************************************************
  * Function Definitions.
@@ -102,7 +140,7 @@ eBlError BootLoaderCheckForUpdates(void)
 
 	if(GPIO_PIN_SET == eGpioCurrState && GPIO_PIN_RESET == eGpioPrevState)
 	{
-		BootLoaderUartSendData((uint8_t*)BL_BOOT_MSG, sizeof(BL_BOOT_MSG) - 1);
+		BootLoaderActions();
 	}
 	else
 	{
@@ -179,12 +217,33 @@ static void BootLoaderUartSendData(uint8_t* pucData, uint16_t uhTxLen)
  * @return : None
  *
  *****************************************************************************/
-static void BootLoaderUartReadData(uint8_t* pucData, uint16_t uhRxLen)
+static void BootLoaderUartReadData(uint8_t* pucData, uint16_t* puhRxLen)
 {
-	if((NULL != pucData) && (0 < uhRxLen))
-	{
+	/* Variable initialization. */
+	uint16_t uhRxIndex = 0;
+	uint32_t uiCurrTick = 0;
 
+	if((NULL != pucData) && (NULL != puhRxLen))
+	{
+		/* Get current tick value. */
+		uiCurrTick = HAL_GetTick();
+
+		/* Recieve byte by byte data through uart. */
+		while(((HAL_GetTick() - uiCurrTick) <= BL_UART_RX_TIMEOUT)
+	    && (uhRxIndex < BL_UART_MAX_RX_LEN))
+		{
+			/* Receive data over uart. */
+			if(HAL_OK == HAL_UART_Receive(&huart2, pucData + uhRxIndex, 1, 10))
+			{
+				uhRxIndex++;
+			}
+		}
 	}
+
+	/* Update the received data length to the output reference. */
+	*puhRxLen = uhRxIndex;
+
+	return;
 }
 
 /******************************************************************************
@@ -243,6 +302,68 @@ static void BootLoaderJumpUserApp(void)
 
 	/* Trigger the reset handler of user application. */
 	pfnAppResetHandler();
+
+	return;
+}
+
+/******************************************************************************
+ * @brief : Function For Initializing Boot Loader, Initialization
+ * 			consist of Initializing uart.
+ *
+ * @fn : BootLoaderInit();
+ *
+ * @param[in] : None
+ *
+ * @param[out] : None.
+ *
+ * @return : None
+ *
+ *****************************************************************************/
+static eBlError BootLoaderParseCmd(uint8_t* pucCmdBuff, uint16_t uhCmdLen,
+		BlCmdStruct* ptBlCmdInfo)
+{
+	/* Variable initialization. */
+	eBlError eBlErr = eBlParamError;
+
+	/* Validity check. */
+	if((NULL != pucCmdBuff) && (BL_MAX_CMD_LEN <= uhCmdLen)
+    && (NULL != ptBlCmdInfo))
+	{
+		/* Copy the length. */
+		ptBlCmdInfo->ucBlCmdLen = pucCmdBuff[BL_CMD_LEN_INDEX];
+
+		/* Copy the opcode. */
+		ptBlCmdInfo->ucBlCmdOpCode = pucCmdBuff[BL_CMD_OPCODE_INDEX];
+
+		/* Copy the crc. */
+		memcpy(&ptBlCmdInfo->uiBlCmdCrc, pucCmdBuff + BL_CMD_CRC_OFFSET,
+				sizeof(uint32_t));
+
+		/* Update the error status. */
+		eBlErr = eBlSuccess;
+	}
+
+	/* Return the error status. */
+	return eBlErr;
+}
+
+/******************************************************************************
+ * @brief : Function For Initializing Boot Loader, Initialization
+ * 			consist of Initializing uart.
+ *
+ * @fn : BootLoaderInit();
+ *
+ * @param[in] : None
+ *
+ * @param[out] : None.
+ *
+ * @return : None
+ *
+ *****************************************************************************/
+static void BootLoaderActions(void)
+{
+	/* Send a boogt loader message. */
+	BootLoaderUartSendData((uint8_t*)BL_BOOT_MSG, sizeof(BL_BOOT_MSG) - 1);
 
 	return;
 }
